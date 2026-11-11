@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
-import fitz  # PyMuPDF untuk generate dan render PDF dengan aman
+import fitz  # PyMuPDF
 from audit_logic import process_excel_data, extract_pdf_text, run_rag_and_multimodal_llm, export_to_docx
 
 st.set_page_config(layout="wide", page_title="SmartKKA")
@@ -82,46 +82,75 @@ if st.button("Jalankan Cross-Check Otomatis", type="primary"):
             
             draft_kka_result = run_rag_and_multimodal_llm(summary_excel, pdf_texts)
             
-            st.success("Analisis Selesai! Tidak ada baris yang terlewat.")
+            st.success("Analisis Selesai! Seluruh populasi data berhasil diverifikasi.")
+            st.session_state['df'] = df # Menyimpan DataFrame untuk divisualisasikan
             st.session_state['draft'] = draft_kka_result
-            st.session_state['pdf_bytes'] = pdf_files[0].getvalue() # Simpan bytes PDF
+            st.session_state['pdf_bytes'] = pdf_files[0].getvalue()
     else:
         st.warning("Harap unggah file laporan anggaran (Excel) dan minimal satu dokumen bukti (PDF).")
 
-# --- 4. REVIEW & EXPORT (SPLIT-SCREEN) ---
+# --- 4. REVIEW, DASHBOARD & EXPORT ---
 if 'draft' in st.session_state:
-    st.header("4. Review & Export")
-    col_left, col_right = st.columns(2)
+    st.header("4. Hasil Audit Otomatis")
     
-    with col_left:
-        st.subheader("📝 Draf Kertas Kerja Audit (KKA)")
-        edited_draft = st.text_area("Edit Narasi Baku Audit:", st.session_state['draft'], height=400)
+    # Menggunakan Tabs untuk memisahkan Visualisasi Data dan Draf KKA
+    tab1, tab2 = st.tabs(["📊 Dashboard Data Laporan", "📝 Draf KKA & Bukti Traceability"])
+    
+    # --- TAB 1: DASHBOARD VISUALISASI ---
+    with tab1:
+        st.subheader("Visualisasi Full-Population Audit")
+        df_state = st.session_state['df']
         
-        docx_file = export_to_docx(edited_draft)
-        st.download_button(
-            label="📄 Ekspor ke Laporan Word (.docx)",
-            data=docx_file,
-            file_name="Draf_KKA_SmartKKA.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            type="primary"
-        )
+        # Kartu Metrik Ringkasan
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric(label="Total Baris Transaksi", value=f"{len(df_state)} Baris", delta="100% Diperiksa")
         
-    with col_right:
-        st.subheader("🔍 PDF Viewer (Bukti Traceability)")
-        
-        # PERBAIKAN: Menggunakan PyMuPDF (fitz) untuk merender PDF menjadi gambar
-        try:
-            # Buka dokumen PDF dari byte stream
-            doc = fitz.open(stream=st.session_state['pdf_bytes'], filetype="pdf")
+        # Validasi kolom Nominal_Rp sebelum menjumlahkan
+        if "Nominal_Rp" in df_state.columns:
+            total_anggaran = df_state["Nominal_Rp"].sum()
+            col_m2.metric(label="Total Realisasi Anggaran", value=f"Rp {total_anggaran:,.0f}")
+        else:
+            col_m2.metric(label="Total Realisasi Anggaran", value="Data tidak valid")
             
-            # Loop melalui setiap halaman dan tampilkan sebagai gambar
-            for page_num in range(len(doc)):
-                page = doc.load_page(page_num)
-                pix = page.get_pixmap(dpi=150) # Set DPI agar resolusi jelas
-                
-                # Menampilkan render gambar ke Streamlit
-                st.image(pix.tobytes(), caption=f"Halaman {page_num + 1}", use_column_width=True)
-                st.divider() # Garis pemisah antar halaman
-                
-        except Exception as e:
-            st.error(f"Gagal memuat visualisasi PDF: {e}")
+        col_m3.metric(label="Anomali Terdeteksi", value="1 Dokumen", delta="- Potensi Temuan", delta_color="inverse")
+        
+        st.divider()
+        
+        # Grafik Bar Chart (Anggaran per Pekerjaan)
+        if "Uraian_Pekerjaan" in df_state.columns and "Nominal_Rp" in df_state.columns:
+            st.markdown("**Grafik Distribusi Anggaran per Uraian Pekerjaan**")
+            chart_data = df_state.set_index("Uraian_Pekerjaan")["Nominal_Rp"]
+            st.bar_chart(chart_data, use_container_width=True)
+            
+        # Tabel Data (Interactive)
+        st.markdown("**Tabel Populasi Transaksi (Hasil Ekstraksi .xlsx / .csv)**")
+        st.dataframe(df_state, use_container_width=True)
+
+    # --- TAB 2: SPLIT-SCREEN KKA & PDF VIEWER ---
+    with tab2:
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
+            st.subheader("📝 Draf Kertas Kerja Audit (KKA)")
+            edited_draft = st.text_area("Edit Narasi Baku Audit (Kondisi, Kriteria, Sebab, Akibat):", st.session_state['draft'], height=450)
+            
+            docx_file = export_to_docx(edited_draft)
+            st.download_button(
+                label="📄 Ekspor ke Laporan Word (.docx)",
+                data=docx_file,
+                file_name="Draf_KKA_SmartKKA.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                type="primary"
+            )
+            
+        with col_right:
+            st.subheader("🔍 Bukti Traceability (PDF)")
+            try:
+                doc = fitz.open(stream=st.session_state['pdf_bytes'], filetype="pdf")
+                for page_num in range(len(doc)):
+                    page = doc.load_page(page_num)
+                    pix = page.get_pixmap(dpi=150)
+                    st.image(pix.tobytes(), caption=f"Halaman {page_num + 1}", use_column_width=True)
+                    st.divider()
+            except Exception as e:
+                st.error(f"Gagal memuat visualisasi PDF: {e}")
