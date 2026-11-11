@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import base64
+import fitz  # PyMuPDF untuk generate dan baca PDF
 from audit_logic import process_excel_data, extract_pdf_text, run_rag_and_multimodal_llm, export_to_docx
 
 st.set_page_config(layout="wide", page_title="SmartKKA")
@@ -9,9 +10,9 @@ st.set_page_config(layout="wide", page_title="SmartKKA")
 st.title("SmartKKA: Sistem Otomatisasi Kertas Kerja Audit")
 st.markdown("Berbasis Multimodal AI & RAG untuk *Full-Population Audit* dan pencocokan regulasi otomatis.")
 
-# --- FUNGSI GENERATE DATA UJI COBA ---
+# --- FUNGSI GENERATE DATA UJI COBA (EXCEL & PDF) ---
 def get_sample_excel():
-    """Membuat file Excel dummy di memori untuk keperluan uji coba."""
+    """Membuat file Excel dummy (Laporan Realisasi Anggaran)."""
     df_sample = pd.DataFrame({
         "Tanggal": ["2023-10-01", "2023-10-15", "2023-11-02"],
         "Kode_Rekening": ["5.2.2.01", "5.2.3.11", "5.2.2.05"],
@@ -24,19 +25,52 @@ def get_sample_excel():
         df_sample.to_excel(writer, index=False, sheet_name='Realisasi_Anggaran')
     return output.getvalue()
 
+def get_sample_pdf():
+    """Membuat file PDF dummy (Dokumen Kontrak/SPJ) menggunakan PyMuPDF."""
+    doc = fitz.open()
+    page = doc.new_page()
+    
+    # Isi teks kontrak dummy untuk memicu RAG (contoh: Keterlambatan proyek tanpa denda)
+    teks_kontrak = """
+    SURAT PERJANJIAN KERJA (KONTRAK)
+    No: KONTRAK/01/X/2023
+    
+    Tanggal: 01 Oktober 2023
+    Pekerjaan: Pembangunan Gedung Tahap 1
+    Nilai Kontrak: Rp 500.000.000
+    
+    Pasal 5: Waktu Pelaksanaan
+    Pekerjaan harus diselesaikan dalam waktu 30 hari kalender.
+    
+    Pasal 8: Sanksi Keterlambatan
+    Apabila terjadi keterlambatan, Pihak Kedua dibebaskan dari denda keterlambatan 
+    atas kesepakatan bersama (Klausa ini akan dideteksi sebagai anomali oleh AI).
+    """
+    
+    page.insert_text((50, 50), teks_kontrak, fontsize=12)
+    return doc.write()
+
 # --- SIDEBAR: UNDUH DATA UJI COBA ---
 with st.sidebar:
     st.header("💡 Data Uji Coba")
-    st.markdown("Gunakan *file* Excel ini untuk menguji coba fitur *Full-Population Audit* jika Anda belum memiliki data.")
+    st.markdown("Unduh kedua file di bawah ini untuk mencoba sistem *Full-Population Audit* dan pencocokan dokumen.")
     
     st.download_button(
-        label="📥 Unduh Sample_Anggaran.xlsx",
+        label="📥 1. Unduh Sample_Anggaran.xlsx",
         data=get_sample_excel(),
         file_name="Sample_Realisasi_Anggaran.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="secondary"
+        use_container_width=True
     )
-    st.info("Catatan: Untuk bukti PDF, Anda dapat mengunggah file PDF sembarang (misal: draf dokumen atau artikel) sebagai simulasi *Traceability* dokumen pendukung.")
+    
+    st.download_button(
+        label="📥 2. Unduh Sample_Kontrak.pdf",
+        data=get_sample_pdf(),
+        file_name="Sample_Bukti_Kontrak.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
+    st.info("Setelah diunduh, unggah kembali kedua file tersebut di kolom utama.")
 
 # --- 1. UPLOAD DATA ---
 st.header("1. Upload Data")
@@ -49,7 +83,7 @@ with col_up2:
 # --- 2 & 3. AUTOMATED CROSS-CHECK & LEGAL RAG MATCHING ---
 if st.button("Jalankan Cross-Check Otomatis", type="primary"):
     if excel_file and pdf_files:
-        with st.spinner("Memproses 100% baris transaksi dan menjalankan Multimodal LLM..."):
+        with st.spinner("Memproses 100% baris transaksi dan menjalankan Multimodal AI..."):
             
             df, summary_excel = process_excel_data(excel_file)
             pdf_texts = extract_pdf_text(pdf_files)
@@ -60,7 +94,7 @@ if st.button("Jalankan Cross-Check Otomatis", type="primary"):
             st.session_state['draft'] = draft_kka_result
             st.session_state['pdf_bytes'] = pdf_files[0].getvalue() # Mengambil PDF pertama untuk preview visual
     else:
-        st.warning("Harap unggah file laporan anggaran (Excel/CSV) dan minimal satu dokumen bukti PDF pendukung.")
+        st.warning("Harap unggah file laporan anggaran (Excel) dan minimal satu dokumen bukti (PDF).")
 
 # --- 4. REVIEW & EXPORT (SPLIT-SCREEN) ---
 if 'draft' in st.session_state:
@@ -70,7 +104,7 @@ if 'draft' in st.session_state:
     
     with col_left:
         st.subheader("📝 Draf Kertas Kerja Audit (KKA)")
-        edited_draft = st.text_area("Edit Narasi Baku Audit (Kondisi, Kriteria, Sebab, Akibat):", st.session_state['draft'], height=400)
+        edited_draft = st.text_area("Edit Narasi Baku Audit:", st.session_state['draft'], height=400)
         
         # Tombol Unduh Laporan KKA ke format Word
         docx_file = export_to_docx(edited_draft)
