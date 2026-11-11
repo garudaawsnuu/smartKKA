@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
-import base64
-import fitz  # PyMuPDF untuk generate dan baca PDF
+import fitz  # PyMuPDF untuk generate dan render PDF dengan aman
 from audit_logic import process_excel_data, extract_pdf_text, run_rag_and_multimodal_llm, export_to_docx
 
 st.set_page_config(layout="wide", page_title="SmartKKA")
@@ -12,7 +11,6 @@ st.markdown("Berbasis Multimodal AI & RAG untuk *Full-Population Audit* dan penc
 
 # --- FUNGSI GENERATE DATA UJI COBA (EXCEL & PDF) ---
 def get_sample_excel():
-    """Membuat file Excel dummy (Laporan Realisasi Anggaran)."""
     df_sample = pd.DataFrame({
         "Tanggal": ["2023-10-01", "2023-10-15", "2023-11-02"],
         "Kode_Rekening": ["5.2.2.01", "5.2.3.11", "5.2.2.05"],
@@ -26,11 +24,8 @@ def get_sample_excel():
     return output.getvalue()
 
 def get_sample_pdf():
-    """Membuat file PDF dummy (Dokumen Kontrak/SPJ) menggunakan PyMuPDF."""
     doc = fitz.open()
     page = doc.new_page()
-    
-    # Isi teks kontrak dummy untuk memicu RAG (contoh: Keterlambatan proyek tanpa denda)
     teks_kontrak = """
     SURAT PERJANJIAN KERJA (KONTRAK)
     No: KONTRAK/01/X/2023
@@ -44,16 +39,15 @@ def get_sample_pdf():
     
     Pasal 8: Sanksi Keterlambatan
     Apabila terjadi keterlambatan, Pihak Kedua dibebaskan dari denda keterlambatan 
-    atas kesepakatan bersama (Klausa ini akan dideteksi sebagai anomali oleh AI).
+    atas kesepakatan bersama. (Anomali: Keterlambatan tanpa denda).
     """
-    
     page.insert_text((50, 50), teks_kontrak, fontsize=12)
     return doc.write()
 
 # --- SIDEBAR: UNDUH DATA UJI COBA ---
 with st.sidebar:
     st.header("💡 Data Uji Coba")
-    st.markdown("Unduh kedua file di bawah ini untuk mencoba sistem *Full-Population Audit* dan pencocokan dokumen.")
+    st.markdown("Unduh kedua file di bawah ini untuk mencoba sistem *Full-Population Audit*.")
     
     st.download_button(
         label="📥 1. Unduh Sample_Anggaran.xlsx",
@@ -62,7 +56,6 @@ with st.sidebar:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
-    
     st.download_button(
         label="📥 2. Unduh Sample_Kontrak.pdf",
         data=get_sample_pdf(),
@@ -84,7 +77,6 @@ with col_up2:
 if st.button("Jalankan Cross-Check Otomatis", type="primary"):
     if excel_file and pdf_files:
         with st.spinner("Memproses 100% baris transaksi dan menjalankan Multimodal AI..."):
-            
             df, summary_excel = process_excel_data(excel_file)
             pdf_texts = extract_pdf_text(pdf_files)
             
@@ -92,21 +84,19 @@ if st.button("Jalankan Cross-Check Otomatis", type="primary"):
             
             st.success("Analisis Selesai! Tidak ada baris yang terlewat.")
             st.session_state['draft'] = draft_kka_result
-            st.session_state['pdf_bytes'] = pdf_files[0].getvalue() # Mengambil PDF pertama untuk preview visual
+            st.session_state['pdf_bytes'] = pdf_files[0].getvalue() # Simpan bytes PDF
     else:
         st.warning("Harap unggah file laporan anggaran (Excel) dan minimal satu dokumen bukti (PDF).")
 
 # --- 4. REVIEW & EXPORT (SPLIT-SCREEN) ---
 if 'draft' in st.session_state:
     st.header("4. Review & Export")
-    
     col_left, col_right = st.columns(2)
     
     with col_left:
         st.subheader("📝 Draf Kertas Kerja Audit (KKA)")
         edited_draft = st.text_area("Edit Narasi Baku Audit:", st.session_state['draft'], height=400)
         
-        # Tombol Unduh Laporan KKA ke format Word
         docx_file = export_to_docx(edited_draft)
         st.download_button(
             label="📄 Ekspor ke Laporan Word (.docx)",
@@ -118,7 +108,20 @@ if 'draft' in st.session_state:
         
     with col_right:
         st.subheader("🔍 PDF Viewer (Bukti Traceability)")
-        # Menampilkan PDF bukti secara real-time di kolom kanan
-        base64_pdf = base64.b64encode(st.session_state['pdf_bytes']).decode('utf-8')
-        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="480" type="application/pdf"></iframe>'
-        st.markdown(pdf_display, unsafe_allow_html=True)
+        
+        # PERBAIKAN: Menggunakan PyMuPDF (fitz) untuk merender PDF menjadi gambar
+        try:
+            # Buka dokumen PDF dari byte stream
+            doc = fitz.open(stream=st.session_state['pdf_bytes'], filetype="pdf")
+            
+            # Loop melalui setiap halaman dan tampilkan sebagai gambar
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                pix = page.get_pixmap(dpi=150) # Set DPI agar resolusi jelas
+                
+                # Menampilkan render gambar ke Streamlit
+                st.image(pix.tobytes(), caption=f"Halaman {page_num + 1}", use_column_width=True)
+                st.divider() # Garis pemisah antar halaman
+                
+        except Exception as e:
+            st.error(f"Gagal memuat visualisasi PDF: {e}")
